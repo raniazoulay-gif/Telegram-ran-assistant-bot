@@ -95,8 +95,14 @@ async def process_message(text: str, update: Update):
     )
     reply = response.content[0].text.strip()
 
+    # נקה markdown code blocks אם יש
+    if "```" in reply:
+        reply = reply.split("```")[-2] if reply.count("```") >= 2 else reply
+        if reply.startswith("json"):
+            reply = reply[4:].strip()
+
     # בדוק אם Claude החזיר JSON לפגישה
-    if reply.startswith("{") and '"action": "calendar"' in reply:
+    if '"action": "calendar"' in reply:
         try:
             data = json.loads(reply)
             success = send_calendar_invite(
