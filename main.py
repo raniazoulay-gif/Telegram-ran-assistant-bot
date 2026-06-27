@@ -69,11 +69,28 @@ async def browse_url(url: str, task: str) -> str:
                 locale="he-IL"
             )
             page = await context.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(4)
+
+            is_elal = "booking.elal.com" in url
+
+            await page.goto(url, wait_until="networkidle", timeout=45000)
+
+            if is_elal:
+                # המתן לטעינת תוצאות הטיסות
+                try:
+                    await page.wait_for_selector("[class*='flight'], [class*='Flight'], [class*='price'], [class*='Price']", timeout=20000)
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+            else:
+                await asyncio.sleep(3)
+
             content = await page.evaluate("() => document.body.innerText")
             await browser.close()
-            return content[:8000]
+
+            if is_elal and len(content.strip()) < 200:
+                return "האתר לא הצליח לטעון את תוצאות הטיסות. נסה שוב."
+
+            return content[:10000]
     except Exception as e:
         logger.error(f"Browse error: {e}")
         return f"שגיאה בגלישה: {str(e)}"
@@ -146,7 +163,7 @@ async def process_message(text: str, update: Update):
                 summary = anthropic_client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=1024,
-                    messages=[{"role": "user", "content": f"המשתמש ביקש: {data.get('task', text)}\n\nתוכן הדף:\n{content}\n\nענה בעברית בצורה ממוקדת וברורה."}]
+                    messages=[{"role": "user", "content": f"המשתמש ביקש: {data.get('task', text)}\n\nתוכן הדף:\n{content}\n\nהוראות:\n- אם יש נתוני טיסות (שעות, מחירים) — הצג בטבלה ברורה בעברית\n- אם יש כותרות חדשות — הצג ברשימה\n- אל תגיד 'אין לי גישה' — הנתונים בתוכן הדף\n- ענה בעברית בלבד"}]
                 )
                 await update.message.reply_text(summary.content[0].text)
             except Exception as e:
