@@ -21,13 +21,15 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 BREVO_API_KEY = os.environ["BREVO_API_KEY"]
 MY_EMAIL = "ranaz@matrix.co.il"
 MY_NAME = "רן אזולאי"
+ALLOWED_CHAT_ID = int(os.environ.get("ALLOWED_CHAT_ID", "0"))
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-TODAY = datetime.now().strftime("%Y-%m-%d")
 
-SYSTEM_PROMPT = f"""אתה עוזר אישי חכם של רן אזולאי. היום: {TODAY}.
+def get_system_prompt():
+    today = datetime.now().strftime("%Y-%m-%d")
+    return f"""אתה עוזר אישי חכם של רן אזולאי. היום: {today}.
 חובה להחזיר JSON בלבד — ללא טקסט נוסף, ללא הסברים, ללא markdown.
 
 פורמטים:
@@ -42,20 +44,28 @@ SYSTEM_PROMPT = f"""אתה עוזר אישי חכם של רן אזולאי. הי
 {{"action": "answer", "text": "תשובה בעברית"}}
 
 כללי URL:
-- טיסות אל-על מ-TLV לפריז (CDG) ב-2026-07-01: https://booking.elal.com/booking/flights?market=IL&lang=he&tripType=ONE_WAY&origin=TLV&destination=CDG&departureDate=2026-07-01&adults=1&children=0&infants=0
-- טיסות כלליות: https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA3LTAxagcIARIDVExWcgcIARIDQ0RH
-- חדשות: https://www.ynet.co.il אם לא צוין אתר אחר
+- טיסות אל-על: https://booking.elal.com/booking/flights?market=IL&lang=he&tripType=ONE_WAY&origin=TLV&destination=CDG&departureDate=2026-07-01&adults=1&children=0&infants=0
+- טיסות כלליות: https://www.google.com/travel/flights
+- חדשות: https://www.ynet.co.il אם לא צוין אחר
 - מזג אוויר: https://www.weather.com/he-IL/weather/today/l/Tel+Aviv
 - כל בקשה לאינטרנט → חובה action=browse"""
 
 
+def is_authorized(update: Update) -> bool:
+    if ALLOWED_CHAT_ID == 0:
+        return True
+    return update.effective_chat.id == ALLOWED_CHAT_ID
+
+
 async def browse_url(url: str, task: str) -> str:
-    """גולש לURL ומחלץ תוכן רלוונטי."""
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
                 locale="he-IL"
             )
             page = await context.new_page()
@@ -95,59 +105,70 @@ def send_calendar_invite(title, date, start_time, end_time, description):
     return resp.status_code == 201
 
 
-async def process_message(text: str, update: Update):
-    # Claude מחליט מה לעשות
-    response = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=512,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": text}]
-    )
-    reply = response.content[0].text.strip()
+def extract_json(text: str) -> str:
+    if "```" in text:
+        import re
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    if "{" in text:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        return text[start:end]
+    return text
 
-    # נקה markdown
-    if "```" in reply:
-        parts = reply.split("```")
-        for part in parts:
-            if "{" in part:
-                reply = part.strip()
-                if reply.startswith("json"):
-                    reply = reply[4:].strip()
-                break
+
+async def process_message(text: str, update: Update):
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            system=get_system_prompt(),
+            messages=[{"role": "user", "content": text}]
+        )
+        reply = response.content[0].text.strip()
+    except Exception as e:
+        await update.message.reply_text("⚠️ שגיאה בתקשורת עם Claude. נסה שוב.")
+        logger.error(f"Claude error: {e}")
+        return
+
+    cleaned = extract_json(reply)
 
     try:
-        data = json.loads(reply)
+        data = json.loads(cleaned)
         action = data.get("action")
 
         if action == "browse":
-            await update.message.reply_text(f"🌐 גולש ל-{data['url']}...")
-            content = await browse_url(data["url"], data.get("task", ""))
-
-            # Claude מנתח את התוכן
-            summary_response = anthropic_client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=1024,
-                messages=[{
-                    "role": "user",
-                    "content": f"המשתמש ביקש: {data.get('task', text)}\n\nתוכן הדף:\n{content}\n\nענה בעברית בצורה ממוקדת."
-                }]
-            )
-            await update.message.reply_text(summary_response.content[0].text)
+            url = data.get("url", "")
+            await update.message.reply_text(f"🌐 גולש ל-{url}...")
+            content = await browse_url(url, data.get("task", text))
+            try:
+                summary = anthropic_client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": f"המשתמש ביקש: {data.get('task', text)}\n\nתוכן הדף:\n{content}\n\nענה בעברית בצורה ממוקדת וברורה."}]
+                )
+                await update.message.reply_text(summary.content[0].text)
+            except Exception as e:
+                await update.message.reply_text("⚠️ שגיאה בעיבוד תוכן הדף.")
+                logger.error(f"Summary error: {e}")
 
         elif action == "calendar":
-            success = send_calendar_invite(
-                data["title"], data["date"], data["start_time"], data["end_time"], data.get("description", "")
-            )
+            title = data.get("title", "פגישה")
+            date = data.get("date", "")
+            start_time = data.get("start_time", "10:00")
+            end_time = data.get("end_time", "11:00")
+            description = data.get("description", "")
+            success = send_calendar_invite(title, date, start_time, end_time, description)
             if success:
                 await update.message.reply_text(
-                    f"✅ פגישה נקבעה!\n\n📌 *{data['title']}*\n📅 {data['date']} | {data['start_time']}–{data['end_time']}\n\nזימון נשלח ל-{MY_EMAIL}",
-                    parse_mode="Markdown"
+                    f"✅ פגישה נקבעה!\n\n📌 {title}\n📅 {date} | {start_time}–{end_time}\n\nזימון נשלח ל-{MY_EMAIL}"
                 )
             else:
                 await update.message.reply_text("⚠️ לא הצלחתי לשלוח את הזימון.")
 
         elif action == "answer":
-            await update.message.reply_text(data["text"])
+            await update.message.reply_text(data.get("text", reply))
 
         else:
             await update.message.reply_text(reply)
@@ -157,6 +178,8 @@ async def process_message(text: str, update: Update):
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
     await update.message.reply_text("🎙️ שומע אותך...")
     voice = update.message.voice
     file = await context.bot.get_file(voice.file_id)
@@ -172,11 +195,19 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Transcribed: {text}")
         await update.message.reply_text(f"🗣️ שמעתי: *{text}*", parse_mode="Markdown")
         await process_message(text, update)
+    except Exception as e:
+        await update.message.reply_text("⚠️ שגיאה בזיהוי הקול. נסה שוב.")
+        logger.error(f"Voice error: {e}")
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
     await process_message(update.message.text, update)
 
 
