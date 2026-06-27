@@ -70,7 +70,7 @@ def send_calendar_invite(title: str, date: str, start_time: str, end_time: str, 
     ics_b64 = base64.b64encode(ics_content.encode()).decode()
 
     payload = {
-        "sender": {"name": "Ran Assistant Bot", "email": "noreply@ran-assistant.com"},
+        "sender": {"name": "Ran Assistant Bot", "email": "raniazoulay@gmail.com"},
         "to": [{"email": MY_EMAIL, "name": MY_NAME}],
         "subject": f"📅 פגישה חדשה: {title}",
         "htmlContent": f"<p>פגישה חדשה נקבעה ביומן שלך:</p><p><b>{title}</b><br>{date} | {start_time}–{end_time}</p><p>{description}</p>",
