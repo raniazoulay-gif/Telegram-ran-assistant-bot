@@ -28,38 +28,42 @@ anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 TODAY = datetime.now().strftime("%Y-%m-%d")
 
 SYSTEM_PROMPT = f"""אתה עוזר אישי חכם של רן אזולאי. היום: {TODAY}.
-אתה מקבל הוראות קוליות ממנו ועליך לנתח את הבקשה ולהחזיר JSON בפורמט הנכון.
+חובה להחזיר JSON בלבד — ללא טקסט נוסף, ללא הסברים, ללא markdown.
 
-**פורמטים אפשריים:**
+פורמטים:
 
-1. גלישה לאתר / חיפוש מידע באינטרנט:
-{{"action": "browse", "url": "https://...", "task": "מה לחפש/לעשות באתר"}}
+1. גלישה/חיפוש/מחירים/חדשות/כל מידע מהאינטרנט:
+{{"action": "browse", "url": "https://...", "task": "מה לחפש"}}
 
-2. קביעת פגישה ביומן:
+2. קביעת פגישה:
 {{"action": "calendar", "title": "כותרת", "date": "YYYY-MM-DD", "start_time": "HH:MM", "end_time": "HH:MM", "description": "תיאור"}}
 
-3. שאלה רגילה שלא דורשת אינטרנט:
-{{"action": "answer", "text": "התשובה כאן בעברית"}}
+3. שאלה שלא דורשת אינטרנט:
+{{"action": "answer", "text": "תשובה בעברית"}}
 
-**כללים:**
-- כשמבקשים מחירי טיסות → url של Google Flights או Skyscanner
-- כשמבקשים חדשות → url של האתר המתאים (ynet.co.il, walla.co.il וכו')
-- כשמבקשים מזג אוויר → url של weather.com
-- תמיד החזר JSON בלבד, ללא טקסט נוסף"""
+כללי URL:
+- טיסות אל-על מ-TLV לפריז (CDG) ב-2026-07-01: https://booking.elal.com/booking/flights?market=IL&lang=he&tripType=ONE_WAY&origin=TLV&destination=CDG&departureDate=2026-07-01&adults=1&children=0&infants=0
+- טיסות כלליות: https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA3LTAxagcIARIDVExWcgcIARIDQ0RH
+- חדשות: https://www.ynet.co.il אם לא צוין אתר אחר
+- מזג אוויר: https://www.weather.com/he-IL/weather/today/l/Tel+Aviv
+- כל בקשה לאינטרנט → חובה action=browse"""
 
 
 async def browse_url(url: str, task: str) -> str:
     """גולש לURL ומחלץ תוכן רלוונטי."""
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.set_extra_http_headers({"Accept-Language": "he-IL,he;q=0.9,en;q=0.8"})
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            await asyncio.sleep(2)
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="he-IL"
+            )
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(4)
             content = await page.evaluate("() => document.body.innerText")
             await browser.close()
-            return content[:6000]
+            return content[:8000]
     except Exception as e:
         logger.error(f"Browse error: {e}")
         return f"שגיאה בגלישה: {str(e)}"
