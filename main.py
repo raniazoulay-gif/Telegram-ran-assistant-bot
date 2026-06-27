@@ -44,10 +44,12 @@ def get_system_prompt():
 {{"action": "answer", "text": "תשובה בעברית"}}
 
 כללי URL:
-- טיסות אל-על: https://booking.elal.com/booking/flights?market=IL&lang=he&tripType=ONE_WAY&origin=TLV&destination=CDG&departureDate=2026-07-01&adults=1&children=0&infants=0
-- טיסות כלליות: https://www.google.com/travel/flights
-- חדשות: https://www.ynet.co.il אם לא צוין אחר
-- מזג אוויר: https://www.weather.com/he-IL/weather/today/l/Tel+Aviv
+- טיסות (כל יעד) → Google Flights: https://www.google.com/travel/flights?q=flights+from+TLV+to+DEST+DATE&hl=iw
+  לדוגמה לונדון 1 יולי: https://www.google.com/travel/flights?q=flights+from+TLV+to+LHR+on+july+1+2026&hl=iw
+  לדוגמה פריז 28 יוני: https://www.google.com/travel/flights?q=flights+from+TLV+to+CDG+on+june+28+2026&hl=iw
+- חדשות ynet: https://www.ynet.co.il
+- חדשות וואלה: https://news.walla.co.il
+- מזג אוויר: https://www.weather.com/he-IL/weather/today/l/Tel+Aviv+Israel
 - כל בקשה לאינטרנט → חובה action=browse"""
 
 
@@ -70,25 +72,23 @@ async def browse_url(url: str, task: str) -> str:
             )
             page = await context.new_page()
 
-            is_elal = "booking.elal.com" in url
+            is_flights = "google.com/travel/flights" in url
 
-            await page.goto(url, wait_until="networkidle", timeout=45000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(5)
 
-            if is_elal:
-                # המתן לטעינת תוצאות הטיסות
+            if is_flights:
                 try:
-                    await page.wait_for_selector("[class*='flight'], [class*='Flight'], [class*='price'], [class*='Price']", timeout=20000)
+                    await page.wait_for_selector("[class*='YMlIz'], [class*='pIav2d'], [aria-label*='טיסה'], [aria-label*='flight']", timeout=15000)
                 except Exception:
                     pass
-                await asyncio.sleep(5)
-            else:
                 await asyncio.sleep(3)
 
             content = await page.evaluate("() => document.body.innerText")
             await browser.close()
 
-            if is_elal and len(content.strip()) < 200:
-                return "האתר לא הצליח לטעון את תוצאות הטיסות. נסה שוב."
+            if is_flights and len(content.strip()) < 200:
+                return "Google Flights לא הצליח לטעון. נסה שוב."
 
             return content[:10000]
     except Exception as e:
